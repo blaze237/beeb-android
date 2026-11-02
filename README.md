@@ -21,6 +21,13 @@
 - A–Z grid with proper D-pad movement, retryable categories, in-place UHD catalogue refresh, recent searches and suggestions, Live now/next progress with a last-watched marker, and an artwork disk + memory cache.
 - Friendly errors throughout.
 
+**UI usability and consistency tweaks**
+- One pink focus language everywhere: plum fill + pink ring on cards, banner, buttons and page controls; pink tint + gentle grow on player transport icons and pink seek bar.
+- Thicker, TV-visible focus rings (5dp primary, 4dp small targets) with consistent tab underlines, so focused items read clearly from the sofa.
+- Page buttons: Previous / Next pagination on programme pages, previous/more episode buttons on series pages, and Show more / More results buttons that keep focus where you left it.
+- Cards announce progress ("42% watched, 12:03 left") with progress bars; episode dialog shows Resume-with-time-left, Start over, Save and Remove actions plus a "more below" scroll cue.
+- Search bar, voice button, Live cards (progress, next-up title, last-watched marker) and Settings rows all share the same focus styling and accessible labels.
+
 The upstream README follows unchanged, apart from this section.
 
 ---
