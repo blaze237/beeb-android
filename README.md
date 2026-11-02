@@ -1,6 +1,33 @@
-# Beeb for Android TV — 0.1.6
+# Beeb for Android TV — Fire TV fork
 
-An independent native BBC player for Android TV and Google TV. Android 8.0 (API 26) or later. Beeb is not affiliated with or endorsed by the BBC.
+> Community fork of [usefulappmaker/beeb-android](https://github.com/usefulappmaker/beeb-android), branched from the 0.1.6 hotfix. An independent native BBC player for Android TV and Google TV. Beeb is not affiliated with or endorsed by the BBC.
+>
+> **Maintenance note:** this fork exists to share Fire TV and low-memory fixes back with the community. It will be updated **very infrequently, if at all** — please take the code as-is. Active development happens upstream.
+
+## What's different in this fork
+
+**Playback on low-memory Fire TV devices**
+- Small-buffer player profile (~15–30s forward, no back-buffer, byte cap), so 1st-gen Fire TV Stick 4K (1.5 GB RAM) no longer dies with out-of-memory errors mid-playback.
+- One shared network client per process instead of one per screen.
+- Minimum SDK lowered to 25 (Android 7.1) for Fire OS 6 devices; TV-home channels still need Android 8.0+.
+
+**A player you can recover from**
+- Plain-language error card with Retry + Back for failed lookups and playback errors (offline, timeouts, blocked networks, decoder failures). UHD-to-HD fallback kept.
+- End-of-episode Up Next offer, announced Skip intro/recap actions, persistent "captions temporarily on" badge, explicit Details button, and saner D-pad/OK focus behaviour.
+
+**Home, Continue Watching, Search, Live**
+- Home banner rotates without rebuilding the screen; offline Home shows its saved date; first-run setup hint.
+- Per-episode Continue Watching (not one-per-show) with progress bars and time-left, a visible Remove-from-history action, and Clear history / Saved / image-cache options in Settings.
+- A–Z grid with proper D-pad movement, retryable categories, in-place UHD catalogue refresh, recent searches and suggestions, Live now/next progress with a last-watched marker, and an artwork disk + memory cache.
+- Friendly errors throughout.
+
+The upstream README follows unchanged, apart from this section.
+
+---
+
+## Beeb for Android TV — 0.1.6 (upstream)
+
+An independent native BBC player for Android TV and Google TV. Android 7.1 (API 25) or later; TV-home channels need Android 8.0+. Beeb is not affiliated with or endorsed by the BBC.
 
 ## Features
 
