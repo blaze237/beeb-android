@@ -32,6 +32,7 @@ object LiveHomeChannels {
         return uri.pathSegments.single().takeIf { it.matches(Regex("[a-z0-9_]{1,80}")) }
     }
     @Synchronized fun publish(context: Context, channels: List<Channel>): Long {
+        if (android.os.Build.VERSION.SDK_INT < 26) error("TV home channels need Android 8.0 or later")
         require(channels.isNotEmpty())
         val helper = PreviewChannelHelper(context)
         val preferences = context.getSharedPreferences("live-home", Context.MODE_PRIVATE)
@@ -57,7 +58,7 @@ object LiveHomeChannels {
                 put(PreviewPrograms.COLUMN_TYPE, PreviewPrograms.TYPE_CHANNEL)
                 put(PreviewPrograms.COLUMN_LIVE, 1)
                 put(PreviewPrograms.COLUMN_TITLE, channel.name)
-                put(PreviewPrograms.COLUMN_SHORT_DESCRIPTION, channel.title)
+                put(PreviewPrograms.COLUMN_SHORT_DESCRIPTION, if (channel.nextTitle.isNotEmpty()) "${channel.title} · Next: ${channel.nextTitle}" else channel.title)
                 put(PreviewPrograms.COLUMN_WEIGHT, channels.size - index)
                 put(PreviewPrograms.COLUMN_INTENT_URI, link(context, channel.id).toUri(Intent.URI_INTENT_SCHEME))
                 put(PreviewPrograms.COLUMN_POSTER_ART_ASPECT_RATIO, PreviewPrograms.ASPECT_RATIO_16_9)

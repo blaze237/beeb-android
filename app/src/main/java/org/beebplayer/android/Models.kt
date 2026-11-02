@@ -4,8 +4,26 @@ package org.beebplayer.android
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
+import java.time.Instant
 
 fun JSONObject.text(key: String, fallback: String = "") = if (isNull(key)) fallback else optString(key, fallback)
+internal fun friendlyError(error: Throwable): String {
+    var cause: Throwable? = error
+    while (cause != null) {
+        if (cause is java.net.UnknownHostException || cause is java.net.ConnectException || cause is java.net.NoRouteToHostException) return "You're offline. Check your connection, then try again."
+        cause = cause.cause
+    }
+    val message = error.message.orEmpty()
+    return when {
+        message.contains("Unable to resolve host", ignoreCase = true) || message.contains("Failed to connect", ignoreCase = true) -> "You're offline. Check your connection, then try again."
+        message.contains("timeout", ignoreCase = true) || message.contains("timed out", ignoreCase = true) -> "The connection timed out. Try again."
+        Regex("HTTP 4\\d\\d").containsMatchIn(message) -> "This content is blocked on your network. Try again later."
+        Regex("HTTP 5\\d\\d").containsMatchIn(message) -> "The programme service is having trouble. Try again shortly."
+        message.contains("no programmes", ignoreCase = true) || message.contains("Empty service response", ignoreCase = true) -> "Nothing is available here right now. Try again later."
+        message.isBlank() || message.contains("Exception", ignoreCase = true) || message.length > 120 -> "Something went wrong. Try again."
+        else -> message
+    }
+}
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 fun JSONObject.list(key: String) = optJSONArray(key)?.objects().orEmpty()
 fun JSONObject.fields(key: String, vararg choices: String): String = optJSONObject(key)?.let { obj -> choices.map { obj.text(it) }.firstOrNull { it.isNotBlank() } }.orEmpty()
@@ -30,7 +48,8 @@ data class Programme(val id: String, val title: String, val subtitle: String = "
 data class Feature(val show: Programme, val image: String, val headline: String, val summary: String)
 data class Home(val features: List<Feature>, val rows: List<Pair<String, List<Programme>>>)
 data class Page(val shows: List<Programme>, val number: Int, val totalPages: Int)
-data class Channel(val id: String, val name: String, val title: String = name, val image: String = "")
+data class Channel(val id: String, val name: String, val title: String = name, val image: String = "", val nextTitle: String = "", val progress: Float? = null)
+data class NowNext(val current: JSONObject?, val nextTitle: String, val progress: Float?)
 data class Skip(val title: String, val startMs: Long, val endMs: Long) {
     fun contains(ms: Long) = ms >= startMs && ms < endMs
     companion object {
@@ -115,4 +134,21 @@ object Parsing {
         return items.sortedWith(compareBy<Programme> { series(it) }.thenBy { it.series }.thenBy { if (it.position > 0) it.position else Int.MAX_VALUE }.thenBy { it.date }.thenBy { it.subtitle })
     }
     fun finished(position: Long, duration: Long, ended: Boolean) = ended || (duration > 0 && position >= duration * .95 && duration - position <= 120_000)
+    fun clock(ms: Long): String {
+        val total = (ms.coerceAtLeast(0) / 1000).toInt()
+        return if (total >= 3600) String.format(java.util.Locale.US, "%d:%02d:%02d", total / 3600, total % 3600 / 60, total % 60)
+        else String.format(java.util.Locale.US, "%d:%02d", total / 60, total % 60)
+    }
+    fun broadcast(elements: List<JSONObject>, now: Instant): NowNext {
+        fun startOf(b: JSONObject) = runCatching { Instant.parse(b.text("scheduled_start")) }.getOrNull()
+        fun endOf(b: JSONObject) = runCatching { Instant.parse(b.text("scheduled_end")) }.getOrNull()
+        val upcoming = elements.filterNot { it.optBoolean("blanked") }.sortedBy { startOf(it) ?: Instant.MAX }
+        val current = upcoming.firstOrNull { b -> val s = startOf(b); val e = endOf(b); s != null && e != null && s <= now && now < e }
+        val nextTitle = upcoming.firstOrNull { b -> val s = startOf(b); s != null && s > now }?.optJSONObject("episode")?.text("title").orEmpty()
+        val progress = current?.let { b ->
+            val s = startOf(b)!!.toEpochMilli().toDouble(); val e = endOf(b)!!.toEpochMilli().toDouble()
+            if (e > s) ((now.toEpochMilli() - s) / (e - s)).toFloat().coerceIn(0f, 1f) else null
+        }
+        return NowNext(current, nextTitle, progress)
+    }
 }

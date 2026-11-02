@@ -68,7 +68,7 @@ This is not a Play Store release. Updates must be signed with the same Android k
 - D-pad: move focus. Centre/OK: select. Back: return to the previous page or leave playback.
 - Playback uses Media3's default controls, timeline, settings and subtitle interface.
 - The small quality badge reports received resolution and HDR/HLG. Programme metadata shows title, episode, length, broadcast date and description where supplied. Select the metadata for the full description.
-- Press OK to reveal controls. Back dismisses visible controls during playback; Back again leaves the player. Pause keeps the standard controls visible.
+- Press Down to reveal controls. OK toggles play/pause, except on a focused action (Skip, Play next, quality, details) or a highlighted transport button, which it activates instead. Back dismisses visible controls during playback; Back again leaves the player. Pause keeps the standard controls visible.
 - The episode dialog's Play action is logo-only, with an accessible Play label.
 - The standard rewind button rewinds and temporarily enables English captions if they were Off and a supported track is present. Dedicated remote Rewind does the same. Left also rewinds when the native controls are hidden; when controls are visible it remains available for normal focus/scrubbing navigation.
 - Temporary captions restore the prior selection after playback reaches the pre-rewind position. Changing the native subtitle selection manually cancels that automatic restoration.

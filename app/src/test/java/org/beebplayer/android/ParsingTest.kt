@@ -48,4 +48,11 @@ class ParsingTest {
         assertTrue(Parsing.finished(3_500_000, 3_600_000, false)); assertFalse(Parsing.finished(3_000_000, 3_600_000, false))
         assertTrue(Parsing.finished(1000, 3600000, true)); assertFalse(Parsing.finished(0, 0, false))
     }
+    @Test fun clockFormatsProgressPositions() {
+        assertEquals("0:00", Parsing.clock(0))
+        assertEquals("0:00", Parsing.clock(-5000))
+        assertEquals("0:09", Parsing.clock(9500))
+        assertEquals("23:14", Parsing.clock((23 * 60 + 14) * 1000L))
+        assertEquals("1:02:03", Parsing.clock((3600 + 2 * 60 + 3) * 1000L))
+    }
 }

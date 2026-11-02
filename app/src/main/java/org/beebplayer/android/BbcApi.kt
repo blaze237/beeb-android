@@ -14,8 +14,14 @@ import java.util.concurrent.TimeUnit
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class BbcApi(private val context: Context) {
-    val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS).build()
+    // One shared client per process: each OkHttpClient owns a connection pool
+    // and dispatcher threads, so minting one per screen leaks them across
+    // repeated plays on small-heap devices.
+    val http: OkHttpClient get() = sharedHttp
     val vault = IdentityVault(context)
+    companion object {
+        private val sharedHttp: OkHttpClient by lazy { OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS).build() }
+    }
     fun get(url: String, client: OkHttpClient = http): String {
         if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Request cancelled")
         require(url.startsWith("https://"))
@@ -39,10 +45,13 @@ class BbcApi(private val context: Context) {
         }
     }
     private fun json(url: String) = JSONObject(get(url))
+    var homeServedFromCache = false
+        private set
+    fun homeCacheTime(): Long = context.cacheDir.resolve("home-v1.json").let { if (it.exists()) it.lastModified() else 0L }
     fun home(): Home {
         val file = context.cacheDir.resolve("home-v1.json")
-        return try { val html = get("https://www.bbc.co.uk/iplayer"); val parsed = Parsing.home(html); file.writeText(html); parsed }
-        catch (e: Exception) { if (file.exists()) Parsing.home(file.readText()) else throw e }
+        return try { val html = get("https://www.bbc.co.uk/iplayer"); val parsed = Parsing.home(html); file.writeText(html); homeServedFromCache = false; parsed }
+        catch (e: Exception) { if (file.exists()) { homeServedFromCache = true; Parsing.home(file.readText()) } else throw e }
     }
     fun genres() = json("https://ibl.api.bbc.co.uk/ibl/v1/categories").list("categories").filter { it.text("kind") == "genre" }.map { it.text("id") to it.text("title") }
     fun page(key: String, category: Boolean, number: Int): Page {
@@ -74,10 +83,9 @@ class BbcApi(private val context: Context) {
     fun channels(): List<Channel> = json("https://ibl.api.bbc.co.uk/ibl/v1/channels").list("channels").filter { it.optBoolean("has_schedule") }.map { j ->
         val id = j.text("id"); val name = j.text("title")
         runCatching {
-            val now = Instant.now()
-            val current = json("https://ibl.api.bbc.co.uk/ibl/v1/channels/$id/broadcasts?per_page=20").optJSONObject("broadcasts")?.list("elements")?.firstOrNull { b -> !b.optBoolean("blanked") && Instant.parse(b.text("scheduled_start")) <= now && now < Instant.parse(b.text("scheduled_end")) }
-            val e = current?.optJSONObject("episode")
-            Channel(id, name, e?.text("title") ?: name, artwork(e?.optJSONObject("images")))
+            val slot = Parsing.broadcast(json("https://ibl.api.bbc.co.uk/ibl/v1/channels/$id/broadcasts?per_page=20").optJSONObject("broadcasts")?.list("elements").orEmpty(), Instant.now())
+            val e = slot.current?.optJSONObject("episode")
+            Channel(id, name, e?.text("title") ?: name, artwork(e?.optJSONObject("images")), slot.nextTitle, slot.progress)
         }.getOrDefault(Channel(id, name))
     }
     private fun selector(xml: String, kind: String): List<String> {

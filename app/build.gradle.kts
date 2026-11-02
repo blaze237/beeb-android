@@ -2,8 +2,8 @@ plugins { id("com.android.application") }
 android {
     namespace = "org.beebplayer.android"
     compileSdk = 37
-    defaultConfig { applicationId = "org.beebplayer.android"; minSdk = 26; targetSdk = 36; resValue("string", "app_name", "Beeb"); versionCode = 7; versionName = "0.1.6"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
-    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    defaultConfig { applicationId = "org.beebplayer.android"; minSdk = 25; targetSdk = 36; resValue("string", "app_name", "Beeb"); versionCode = 7; versionName = "0.1.6"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
     buildFeatures { buildConfig = true; resValues = true }
     val keyPath = providers.environmentVariable("BEEB_KEYSTORE_PATH").orNull
     signingConfigs {
@@ -24,6 +24,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.11.1")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")

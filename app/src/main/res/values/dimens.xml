@@ -1,0 +1,10 @@
+<resources>
+    <!-- 10-foot focus visibility (UX P2-25). Primary rings (cards, banner, buttons, tab
+         underline) use beeb_focus_ring; small targets (chips, search bar, mic, bookmark,
+         series pills, transport icons) use beeb_focus_ring_small. Pink identity #FA2389
+         is unchanged; muted greys already exceed 7:1 on #101016 and plum. -->
+    <dimen name="beeb_focus_ring">5dp</dimen>
+    <dimen name="beeb_focus_ring_small">4dp</dimen>
+    <dimen name="beeb_tab_underline_width">32dp</dimen>
+    <dimen name="beeb_tab_underline_height">5dp</dimen>
+</resources>

@@ -33,6 +33,8 @@ import java.util.concurrent.Executors
 
 @OptIn(UnstableApi::class)
 class PlaybackActivity : ComponentActivity() {
+    private val pink = Color.rgb(250, 35, 137)
+    private val plum = 0xFF382039.toInt()
     private lateinit var api: BbcApi
     private lateinit var store: LocalStore
     private lateinit var player: ExoPlayer
@@ -46,6 +48,11 @@ class PlaybackActivity : ComponentActivity() {
     private var source: Stream? = null
     private var alive = true
     private var fallback = false
+    private var lastAllowUhd = true
+    private lateinit var errorCard: LinearLayout
+    private lateinit var errorText: TextView
+    private lateinit var retryButton: Button
+    private var retryAction: (() -> Unit)? = null
     private var resume = 0L
     private var temporaryUntil = -1L
     private var originalTextParameters: androidx.media3.common.TrackSelectionParameters? = null
@@ -81,7 +88,7 @@ class PlaybackActivity : ComponentActivity() {
         next = intent.getStringExtra("next")?.let { Programme.restore(JSONObject(it)) }
         resume = savedInstanceState?.getLong("position") ?: if (intent.getBooleanExtra("restart", false)) 0 else episode?.let(store::resume) ?: 0
         val renderers = DefaultRenderersFactory(this).setEnableDecoderFallback(true).forceDisableMediaCodecAsynchronousQueueing()
-        player = ExoPlayer.Builder(this, renderers).setSeekBackIncrementMs(10_000).setSeekForwardIncrementMs(10_000).build().apply { setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true); setHandleAudioBecomingNoisy(true) }
+        player = ExoPlayer.Builder(this, renderers).setLoadControl(PlaybackMemory.createLoadControl()).setSeekBackIncrementMs(10_000).setSeekForwardIncrementMs(10_000).build().apply { setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true); setHandleAudioBecomingNoisy(true) }
         val root = object : FrameLayout(this) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean = if (handlePlaybackKey(event)) true else super.dispatchKeyEvent(event)
         }.apply { setBackgroundColor(Color.BLACK) }
@@ -91,6 +98,23 @@ class PlaybackActivity : ComponentActivity() {
         root.addView(extras, FrameLayout.LayoutParams(-1, -1))
         status = text("Finding the best available stream…", 20f).apply { setBackgroundColor(0xCC101016.toInt()); maxWidth = dp(650) }
         root.addView(status, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        errorText = text("", 19f).apply { maxWidth = dp(650); gravity = Gravity.CENTER }
+        retryButton = button("Retry") { retryAction?.invoke() }
+        errorCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+            setBackgroundColor(0xCC101016.toInt()); setPadding(dp(24), dp(20), dp(24), dp(20))
+            addView(errorText)
+            addView(LinearLayout(this@PlaybackActivity).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+                setPadding(0, dp(12), 0, 0)
+                addView(retryButton, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(12) })
+                addView(button("Back") { finish() })
+            })
+            visibility = View.GONE
+        }
+        root.addView(errorCard, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        root.isFocusable = true
+        root.isFocusableInTouchMode = true
         setContentView(root)
         captionManager = getSystemService(CAPTIONING_SERVICE) as android.view.accessibility.CaptioningManager
         captionManager.addCaptioningChangeListener(captionListener)
@@ -103,8 +127,8 @@ class PlaybackActivity : ComponentActivity() {
         })
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY) { status.visibility = View.GONE; extras.ready(); badge(); extras.scheduleHide() }
-                if (state == Player.STATE_ENDED) { episode?.let { store.update(it, next, player.duration, player.duration, true) }; extras.show(); extras.update(currentSkip, next) }
+                if (state == Player.STATE_READY) { status.visibility = View.GONE; extras.onPlaying(); extras.ready(); badge(); extras.scheduleHide() }
+                if (state == Player.STATE_ENDED) { episode?.let { store.update(it, next, player.duration, player.duration, true) }; extras.onEnded(next) }
                 diagnostic("state-$state")
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { extras.update(); if (isPlaying) extras.scheduleHide() else if (player.playbackState == Player.STATE_READY) extras.show() }
@@ -112,13 +136,13 @@ class PlaybackActivity : ComponentActivity() {
             override fun onTracksChanged(tracks: Tracks) { badge(); diagnostic("tracks") }
             override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) { if (cueGroup.cues.isNotEmpty()) captionSamples++; diagnostic("captions") }
             override fun onTrackSelectionParametersChanged(parameters: TrackSelectionParameters) {
-                if (!settingTemporaryCaptions && temporaryUntil >= 0) { originalTextParameters = null; temporaryUntil = -1 }
+                if (!settingTemporaryCaptions && temporaryUntil >= 0) { originalTextParameters = null; temporaryUntil = -1; extras.dismissTransientNotice() }
             }
             override fun onPlayerError(error: PlaybackException) {
                 playerFailure = error.errorCodeName
                 failureDetail = (error.cause as? androidx.media3.exoplayer.ExoTimeoutException)?.let { "timeout operation ${it.timeoutOperation}" } ?: error.cause?.javaClass?.simpleName.orEmpty()
                 if (source?.uhd == true && !fallback && episode != null) { fallback = true; resume = player.currentPosition; resolve(false) }
-                else { status.text = "Playback unavailable: ${error.errorCodeName}\n${error.cause?.message.orEmpty()}\nPress Back to return."; status.visibility = View.VISIBLE; extras.show() }
+                else { showError(friendlyPlayerError(error)) { retryPlayback() } }
                 diagnostic("error-${error.errorCodeName}")
             }
         })
@@ -128,11 +152,13 @@ class PlaybackActivity : ComponentActivity() {
             val current = episode!!
             io.execute {
                 val following = runCatching { api.episodes(Programme(current.showId, current.title)).let { items -> items.indexOfFirst { it.id == current.id }.takeIf { it >= 0 }?.let { items.getOrNull(it + 1) } } }.getOrNull()
-                main.post { if (alive) next = following }
+                main.post { if (alive) { next = following; if (player.playbackState == Player.STATE_ENDED) extras.onEnded(following) } }
             }
         }
     }
     private fun resolve(allowUhd: Boolean) {
+        lastAllowUhd = allowUhd
+        hideError()
         status.text = if (fallback) "UHD could not play. Trying HD…" else "Finding the best available stream…"; status.visibility = View.VISIBLE
         io.execute {
             val result = runCatching {
@@ -140,11 +166,45 @@ class PlaybackActivity : ComponentActivity() {
                     val url = intent.getStringExtra("testStream")!!; require(url.startsWith("https://")); Stream(url, caption = intent.getStringExtra("testCaption").orEmpty())
                 } else episode?.let { api.stream(it, allowUhd && supportsUhd()) } ?: api.live(intent.getStringExtra("channel") ?: error("Missing episode"))
             }
-            main.post { if (alive) result.fold(::prepare) { error -> status.text = error.message ?: "Stream lookup failed"; extras.show(); diagnostic("lookup-failed") } }
+            main.post { if (alive) result.fold(::prepare) { error -> showError(friendlyError(error)) { resolve(lastAllowUhd) }; diagnostic("lookup-failed") } }
+        }
+    }
+    private fun showError(message: String, retry: () -> Unit) {
+        status.visibility = View.GONE
+        errorText.text = message
+        retryAction = retry
+        errorCard.visibility = View.VISIBLE
+        extras.show()
+        retryButton.requestFocus()
+    }
+    private fun hideError() { retryAction = null; if (::errorCard.isInitialized) errorCard.visibility = View.GONE }
+    private fun retryPlayback() { val current = source; if (current != null) prepare(current) else resolve(lastAllowUhd) }
+    private fun friendlyPlayerError(error: PlaybackException): String {
+        var cause: Throwable? = error.cause
+        while (cause != null) {
+            if (cause is java.net.UnknownHostException || cause is java.net.ConnectException || cause is java.net.NoRouteToHostException) return "You're offline. Check your connection, then try again."
+            if (cause is androidx.media3.exoplayer.ExoTimeoutException) return "The connection timed out. Try again."
+            if (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                return if (cause.responseCode in 400..499) "This content is blocked on your network. Try again later."
+                else "The programme service is having trouble. Try again shortly."
+            }
+            cause = cause.cause
+        }
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "You're offline. Check your connection, then try again."
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "The connection timed out. Try again."
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "The programme service is having trouble. Try again shortly."
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "This programme couldn't play on this device. Try again, or go back and pick another version."
+            else -> friendlyError(error)
         }
     }
     private fun prepare(stream: Stream) {
         playerFailure = ""
+        hideError()
         source = stream
         val base = android.net.Uri.parse(stream.liveCaptions?.authorisationUrl ?: stream.url)
         val data = ResolvingDataSource.Factory(OkHttpDataSource.Factory(api.http)) { spec ->
@@ -186,8 +246,8 @@ class PlaybackActivity : ComponentActivity() {
         startActivity(android.content.Intent(this, PlaybackActivity::class.java).putExtra("episode", upcoming.json().toString()).putExtra("restart", true))
         finish()
     }
-    private fun rewind() {
-        if (!player.isCurrentMediaItemSeekable) { extras.show(); return }
+    private fun rewind(focusSeekBar: Boolean = false) {
+        if (!player.isCurrentMediaItemSeekable) { if (focusSeekBar) extras.showOnSeekBar() else extras.show(); return }
         val previous = player.currentPosition
         if (store.autoCaptions() && player.currentTracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSupported } && (temporaryUntil >= 0 || player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT))) {
             if (temporaryUntil < 0) originalTextParameters = player.trackSelectionParameters
@@ -197,14 +257,21 @@ class PlaybackActivity : ComponentActivity() {
             settingTemporaryCaptions = false
         }
         if (player.isCurrentMediaItemSeekable) player.seekTo(maxOf(0, previous - 10_000))
-        extras.show(); if (temporaryUntil >= 0) extras.replayNotice()
+        if (focusSeekBar) extras.showOnSeekBar() else extras.show(); if (temporaryUntil >= 0) extras.replayNotice()
     }
     private fun restoreCaptions() { settingTemporaryCaptions = true; originalTextParameters?.let { player.trackSelectionParameters = it }; originalTextParameters = null; temporaryUntil = -1; settingTemporaryCaptions = false; extras.dismissTransientNotice() }
     private fun save() { episode?.let { store.update(it, next, player.currentPosition, player.duration) } }
     override fun onSaveInstanceState(outState: Bundle) { outState.putLong("position", player.currentPosition); super.onSaveInstanceState(outState) }
     override fun onPause() { if (::player.isInitialized) { save(); player.pause() }; super.onPause() }
     override fun onDestroy() { alive = false; main.removeCallbacksAndMessages(null); io.shutdownNow(); captionManager.removeCaptioningChangeListener(captionListener); extras.dispose(); player.release(); super.onDestroy() }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Activity-level handling: views lose focus when the controller hides
+        // (Fire OS 7.1 drops DPAD keys with null focus before they reach views).
+        if (handlePlaybackKey(event)) return true
+        return super.dispatchKeyEvent(event)
+    }
     private fun handlePlaybackKey(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MEDIA_REWIND -> { rewind(); return true }
@@ -212,19 +279,36 @@ class PlaybackActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); extras.show(); return true }
                 KeyEvent.KEYCODE_MEDIA_PLAY -> { player.play(); extras.show(); return true }
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); extras.show(); return true }
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (!extras.visible && !extras.skip.hasFocus()) { rewind(); return true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (!extras.visible && !extras.skip.hasFocus()) { if (player.isCurrentMediaItemSeekable) player.seekTo(player.currentPosition + 10_000); extras.show(); return true }
+                KeyEvent.KEYCODE_DPAD_UP -> if (!extras.visible && !extras.skip.hasFocus()) { extras.show(); return true }
+                    else if (extras.visible && extras.focusTransportFromSeek()) { return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> if (!extras.visible && !extras.skip.hasFocus()) { extras.showOnSeekBar(); return true }
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (!extras.visible && !extras.skip.hasFocus()) { rewind(focusSeekBar = true); return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (!extras.visible && !extras.skip.hasFocus()) { if (player.isCurrentMediaItemSeekable) player.seekTo(player.currentPosition + 10_000); extras.showOnSeekBar(); return true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> when (centerKeyAction(focusedAction())) {
+                    CenterKeyAction.ACTIVATE_FOCUSED -> return false
+                    CenterKeyAction.TOGGLE_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); extras.show(); return true }
+                }
             }
-            if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
+            if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)) {
                 if (!extras.visible && !extras.skip.hasFocus()) { extras.show(); return true }
                 extras.show(false)
             }
         }
         return false
     }
+    /** True when OK should click the focused view (Skip, Play next, quality, Details, error Retry/Back) instead of toggling play/pause. */
+    private fun focusedAction(): Boolean {
+        if (!extras.centerShouldToggle()) return true
+        if (::errorCard.isInitialized && errorCard.visibility == View.VISIBLE) {
+            var parent = currentFocus?.takeIf { it.isShown }?.parent
+            while (parent != null) { if (parent === errorCard) return true; parent = parent.parent }
+        }
+        return false
+    }
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun text(value: String, size: Float) = TextView(this).apply { text = value; textSize = size; setTextColor(Color.WHITE); setPadding(dp(16), dp(10), dp(16), dp(10)) }
-    private fun button(title: String, action: () -> Unit) = Button(this).apply { text = title; isAllCaps = false; setTextColor(Color.WHITE); setOnClickListener { action() } }
+    private fun selectedBackground(on: Boolean) = android.graphics.drawable.GradientDrawable().apply { setColor(if (on) plum else 0xFF1C1B24.toInt()); cornerRadius = dp(10).toFloat(); setStroke(dp(if (on) 3 else 1), if (on) pink else 0xFF47434E.toInt()) }
+    private fun button(title: String, action: () -> Unit) = Button(this).apply { text = title; isAllCaps = false; textSize = 18f; setTextColor(Color.WHITE); setPadding(dp(20), dp(8), dp(20), dp(8)); isFocusable = true; isFocusableInTouchMode = true; background = selectedBackground(false); setOnFocusChangeListener { v, on -> v.background = selectedBackground(on) }; setOnClickListener { action() } }
     private fun diagnostic(event: String) {
         if (!BuildConfig.DEBUG) return
         val j = debugSnapshot().put("event", event)
@@ -242,3 +326,9 @@ class PlaybackActivity : ComponentActivity() {
     internal fun debugControls(): NativePlayerExtras { check(BuildConfig.DEBUG); return extras }
     internal fun debugSeek(ms: Long) { check(BuildConfig.DEBUG); player.seekTo(ms); player.play() }
 }
+
+/** OK policy: click the focused action, otherwise toggle play/pause — even with the controller hidden. */
+internal enum class CenterKeyAction { TOGGLE_PLAY_PAUSE, ACTIVATE_FOCUSED }
+
+internal fun centerKeyAction(focusedIsAction: Boolean) =
+    if (focusedIsAction) CenterKeyAction.ACTIVATE_FOCUSED else CenterKeyAction.TOGGLE_PLAY_PAUSE
